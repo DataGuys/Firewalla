@@ -78,13 +78,12 @@ services:
     volumes:
       - /data/adguardhome/conf:/opt/adguardhome/conf
       - /data/adguardhome/work:/opt/adguardhome/work
+    # Note: We're binding specifically to the Docker network IP
     ports:
-      - "53:53/tcp"
-      - "53:53/udp"
-      - "80:80/tcp"
-      - "443:443/tcp"
-      - "3000:3000/tcp"
-      - "853:853/tcp"
+      - "172.16.1.3:53:53/tcp"
+      - "172.16.1.3:53:53/udp"
+      - "172.16.1.3:3000:3000/tcp"
+      - "172.16.1.3:80:80/tcp"
     dns:
       - 1.1.1.1
       - 1.0.0.1
