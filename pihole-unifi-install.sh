@@ -86,6 +86,17 @@ services:
       TZ: 'UTC'
       WEBPASSWORD: ${PIHOLE_PASSWORD}
       FTLCONF_LOCAL_IPV4: '172.16.1.3'
+      PIHOLE_DNS_: '1.1.1.1;1.0.0.1'  # Explicitly set upstream DNS
+      DNS1: '1.1.1.1'  # Backup DNS configuration
+      DNS2: '1.0.0.1'  # Backup DNS configuration
+      DNSMASQ_LISTENING: 'all'  # Listen on all interfaces
+      FTLCONF_REPLY_ADDR4: '172.16.1.3'
+      ServerIP: '172.16.1.3'  # Explicit ServerIP setting
+    dns:
+      - 1.1.1.1  # Primary DNS for container
+      - 1.0.0.1  # Secondary DNS for container
+    cap_add:
+      - NET_ADMIN
     networks:
       unifi_default:
         ipv4_address: 172.16.1.3
@@ -96,9 +107,6 @@ services:
       - "53:53/tcp"
       - "53:53/udp"
       - "80:80/tcp"
-    dns:
-      - 1.1.1.1
-      - 1.0.0.1
 
 networks:
   unifi_default:
@@ -107,6 +115,8 @@ networks:
       config:
         - subnet: 172.16.1.0/24
           gateway: 172.16.1.1
+    driver_opts:
+      com.docker.network.bridge.name: br-pihole
 EOL
 
 sudo chown pi $path2/docker-compose.yaml
