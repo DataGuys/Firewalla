@@ -1,79 +1,78 @@
 #!/bin/bash
-# AdGuard Home and UniFi Controller Installation Script for Firewalla Gold
-# Version: 1.0.0
+# Installation script for UniFi Controller and AdGuard Home on Firewalla Gold
+# Version: 1.0.3
+# This script carefully manages Docker networking and ensures clean installation
 
 # Generate a secure random password for AdGuard Home
 ADGUARD_PASSWORD=$(openssl rand -base64 16)
-# Generate a username (default: admin)
 ADGUARD_USER="admin"
 
-# Create necessary directories for UniFi
-path1=/data/unifi
-if [ ! -d "$path1" ]; then
-    sudo mkdir $path1
-    sudo chown pi $path1
-    sudo chmod +rw $path1
-    echo -e "\n✅ unifi directory created."
-else
-    echo -e "\n✅ unifi directory exists."
+# First, ensure we clean up any existing installations
+echo "Cleaning up any existing installations..."
+sudo systemctl stop docker-compose@unifi 2>/dev/null || true
+
+# Remove existing containers if they exist
+if sudo docker ps -a | grep -q "unifi\|adguardhome"; then
+    echo "Removing existing containers..."
+    sudo docker rm -f unifi adguardhome 2>/dev/null || true
 fi
 
-# Create directory for AdGuard Home data
-path_adguard=/data/adguardhome
-if [ ! -d "$path_adguard" ]; then
-    sudo mkdir -p $path_adguard/conf
-    sudo mkdir -p $path_adguard/work
-    sudo chown -R pi:pi $path_adguard
-    sudo chmod -R +rw $path_adguard
-    echo -e "\n✅ AdGuard Home directories created."
-else
-    echo -e "\n✅ AdGuard Home directories exist."
+# Clean up any existing networks
+echo "Cleaning up Docker networks..."
+for network in $(sudo docker network ls --filter name=unifi --format "{{.Name}}"); do
+    echo "Removing network: $network"
+    sudo docker network rm $network 2>/dev/null || true
+done
+
+# Create necessary directories with proper permissions
+echo "Setting up directories..."
+for dir in "/data/unifi" "/data/adguardhome/conf" "/data/adguardhome/work"; do
+    if [ ! -d "$dir" ]; then
+        sudo mkdir -p "$dir"
+        echo "✅ Created $dir"
+    fi
+    sudo chown -R pi:pi "$dir"
+    sudo chmod -R 755 "$dir"
+done
+
+# Set up Docker run directory
+DOCKER_DIR="/home/pi/.firewalla/run/docker/unifi"
+if [ ! -d "$DOCKER_DIR" ]; then
+    sudo mkdir -p "$DOCKER_DIR"
+    sudo chown pi:pi "$DOCKER_DIR"
+    sudo chmod 755 "$DOCKER_DIR"
+    echo "✅ Created Docker configuration directory"
 fi
 
-# Set up Docker run directories
-path2=/home/pi/.firewalla/run/docker/unifi/
-if [ ! -d "$path2" ]; then
-    sudo mkdir -p $path2
-    sudo chown pi $path2
-    sudo chmod +rw $path2
-    echo -e "\n✅ unifi run directory created."
-else
-    echo -e "\n✅ unifi run directory exists."
-fi
-
-# Create and configure docker-compose.yaml
-echo "Creating docker-compose.yaml..."
-cat > $path2/docker-compose.yaml << EOL
+# Create docker-compose.yaml with explicit network naming
+echo "Creating docker-compose configuration..."
+cat > "$DOCKER_DIR/docker-compose.yaml" << EOL
 version: '3'
 services:
   unifi:
-    # Using the official Ubiquiti image from linuxserver.io
     image: lscr.io/linuxserver/unifi-network-application:latest
     container_name: unifi
     restart: unless-stopped
     environment:
       - TZ=UTC
-      - PUID=1000    # This matches the 'pi' user in Firewalla
-      - PGID=1000    # This matches the 'pi' group in Firewalla
-      - MEM_LIMIT=1024    # Limiting memory usage to 1GB for stability
-      - MEM_STARTUP=1024  # Allocating 1GB for startup
+      - PUID=1000
+      - PGID=1000
+      - MEM_LIMIT=512M
+      - MEM_STARTUP=512M
     networks:
-      unifi_default:
+      docker_network:
         ipv4_address: 172.16.1.2
     volumes:
-      - /data/unifi:/config    # Note: Changed from /unifi to /config as per official image specs
+      - /data/unifi:/config
     ports:
-      - "172.16.1.2:3478:3478/udp"  # STUN
-      - "172.16.1.2:8080:8080"      # Device/ Controller Communication
-      - "172.16.1.2:8443:8443"      # Web UI
-      - "172.16.1.2:8880:8880"      # HTTP Portal Redirect
-      - "172.16.1.2:8843:8843"      # HTTPS Portal Redirect
-      - "172.16.1.2:6789:6789"      # Mobile Speed Test
-      - "172.16.1.2:10001:10001/udp" # Discovery
-      - "172.16.1.2:1900:1900/udp"  # L2 Discovery
-      - "172.16.1.2:3478:3478"      # STUN
-      - "172.16.1.2:5514:5514/udp"  # Remote Syslog
-    
+      - "172.16.1.2:3478:3478/udp"
+      - "172.16.1.2:8080:8080"
+      - "172.16.1.2:8443:8443"
+      - "172.16.1.2:8880:8880"
+      - "172.16.1.2:8843:8843"
+      - "172.16.1.2:6789:6789"
+      - "172.16.1.2:10001:10001/udp"
+
   adguardhome:
     container_name: adguardhome
     image: adguard/adguardhome:latest
@@ -81,7 +80,7 @@ services:
     environment:
       - TZ=UTC
     networks:
-      unifi_default:
+      docker_network:
         ipv4_address: 172.16.1.3
     volumes:
       - /data/adguardhome/conf:/opt/adguardhome/conf
@@ -91,15 +90,13 @@ services:
       - "172.16.1.3:53:53/udp"
       - "172.16.1.3:3000:3000/tcp"
       - "172.16.1.3:80:80/tcp"
-    dns:
-      - 1.1.1.1
-      - 1.0.0.1
     cap_add:
       - NET_ADMIN
       - NET_BIND_SERVICE
 
 networks:
-  unifi_default:
+  docker_network:
+    name: docker_network  # Explicitly naming the network
     driver: bridge
     ipam:
       config:
@@ -107,197 +104,76 @@ networks:
           gateway: 172.16.1.1
 EOL
 
-sudo chown pi $path2/docker-compose.yaml
-sudo chmod +rw $path2/docker-compose.yaml
-echo -e "\n✅ docker-compose.yaml created."
+echo "✅ Created docker-compose.yaml"
 
-# Create initial AdGuard Home configuration
-cat > $path_adguard/conf/AdGuardHome.yaml << EOL
-bind_host: 0.0.0.0
-bind_port: 3000
-beta_bind_port: 0
-users:
-  - name: ${ADGUARD_USER}
-    password: ${ADGUARD_PASSWORD}
-auth_attempts: 5
-block_auth_min: 15
-http_proxy: ""
-language: ""
-debug_pprof: false
-web_session_ttl: 720
-dns:
-  bind_hosts:
-    - 0.0.0.0
-  port: 53
-  statistics_interval: 1
-  querylog_enabled: true
-  querylog_file_enabled: true
-  querylog_interval: 2160h
-  querylog_size_memory: 1000
-  anonymize_client_ip: false
-  protection_enabled: true
-  blocking_mode: default
-  blocking_ipv4: ""
-  blocking_ipv6: ""
-  blocked_response_ttl: 10
-  parental_block_host: family-block.dns.adguard.com
-  safebrowsing_block_host: standard-block.dns.adguard.com
-  ratelimit: 20
-  ratelimit_whitelist: []
-  refuse_any: true
-  upstream_dns:
-    - https://dns.cloudflare.com/dns-query
-    - https://dns.google/dns-query
-  upstream_dns_file: ""
-  bootstrap_dns:
-    - 1.1.1.1
-    - 8.8.8.8
-  all_servers: false
-  fastest_addr: false
-  fastest_timeout: 1s
-  allowed_clients: []
-  disallowed_clients: []
-  blocked_hosts:
-    - version.bind
-    - id.server
-    - hostname.bind
-  trusted_proxies:
-    - 127.0.0.1
-    - ::1
-  cache_size: 4194304
-  cache_ttl_min: 0
-  cache_ttl_max: 0
-  cache_optimistic: false
-  bogus_nxdomain: []
-  aaaa_disabled: false
-  enable_dnssec: true
-  edns_client_subnet: false
-  max_goroutines: 300
-  ipset: []
-  filtering_enabled: true
-  filters_update_interval: 24
-  parental_enabled: false
-  safesearch_enabled: false
-  safebrowsing_enabled: false
-  safebrowsing_cache_size: 1048576
-  safesearch_cache_size: 1048576
-  parental_cache_size: 1048576
-  cache_time: 30
-  rewrites: []
-  blocked_services: []
-  upstream_timeout: 10s
-  local_domain_name: lan
-  resolve_clients: true
-  use_private_ptr_resolvers: true
-  local_ptr_upstreams: []
-tls:
-  enabled: false
-  server_name: ""
-  force_https: false
-  port_https: 443
-  port_dns_over_tls: 853
-  certificate_chain: ""
-  private_key: ""
-  certificate_path: ""
-  private_key_path: ""
-filters:
-  - enabled: true
-    url: https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt
-    name: AdGuard DNS filter
-    id: 1
-  - enabled: true
-    url: https://adaway.org/hosts.txt
-    name: AdAway Default Blocklist
-    id: 2
-whitelist_filters: []
-user_rules: []
-dhcp:
-  enabled: false
-  interface_name: ""
-  local_domain_name: lan
-  dhcpv4:
-    gateway_ip: ""
-    subnet_mask: ""
-    range_start: ""
-    range_end: ""
-    lease_duration: 86400
-    icmp_timeout_msec: 1000
-    options: []
-  dhcpv6:
-    range_start: ""
-    lease_duration: 86400
-    ra_slaac_only: false
-    ra_allow_slaac: false
-clients: []
-log_compress: false
-log_localtime: false
-log_max_backups: 0
-log_max_size: 100
-log_max_age: 3
-log_file: ""
-verbose: false
-os:
-  group: ""
-  user: ""
-  rlimit_nofile: 0
-schema_version: 12
-EOL
-
-# Start Docker services
-cd $path2
-sudo systemctl start docker-compose@unifi
-
-# Function to check if a container is ready
-function check_container_ready() {
+# Function to monitor container startup
+monitor_container() {
     local container_name=$1
-    echo -n "Starting $container_name (this can take ~ one minute)"
-    while [ -z "$(sudo docker ps | grep $container_name | grep -o Up)" ]
-    do
+    local max_attempts=150  # 5 minutes (2 seconds per attempt)
+    local attempt=1
+    
+    echo -n "Starting $container_name (this may take up to 5 minutes)"
+    
+    while [ $attempt -le $max_attempts ]; do
+        local status=$(sudo docker inspect --format='{{.State.Status}}' $container_name 2>/dev/null)
+        
+        if [ "$status" = "running" ]; then
+            if [ "$container_name" = "unifi" ]; then
+                # Additional check for UniFi's web interface
+                if sudo docker logs $container_name 2>&1 | grep -q "Starting UniFi Controller"; then
+                    echo -e "\n✅ $container_name is now running"
+                    return 0
+                fi
+            else
+                echo -e "\n✅ $container_name is now running"
+                return 0
+            fi
+        fi
+        
         echo -n "."
-        sleep 2s
+        sleep 2
+        attempt=$((attempt + 1))
     done
-    echo -e "\n✅ $container_name has started"
+    
+    echo -e "\n⚠️  Container startup is taking longer than usual"
+    return 1
 }
 
-# Wait for both containers to be ready
-check_container_ready "unifi"
-check_container_ready "adguardhome"
+# Start services
+echo "Starting Docker services..."
+cd "$DOCKER_DIR"
+sudo systemctl start docker-compose@unifi
+
+# Monitor container startup
+monitor_container "unifi"
+monitor_container "adguardhome"
 
 # Configure networks
-echo "configuring networks..."
-ID=$(sudo docker network ls | awk '$2 == "unifi_default" {print $1}')
+echo "Configuring network routes..."
+ID=$(sudo docker network ls | grep "docker_network" | awk '{print $1}')
 while true; do
     if ping -W 1 -c 1 172.16.1.2 > /dev/null 2>&1 && ip route show table lan_routable | grep -q '172.16.1.0'; then
         break
     fi
     sudo ip route add 172.16.1.0/24 dev br-$ID table lan_routable
     sudo ip route add 172.16.1.0/24 dev br-$ID table wan_routable
+    sleep 1
 done
-echo -e "\n✅ Networks configured"
+echo "✅ Network routes configured"
 
 # Configure DNS settings
-dns_settings=/home/pi/.firewalla/config/dnsmasq_local/unifi
-sudo touch $dns_settings
-sudo chown pi $dns_settings
-sudo chmod a+rw $dns_settings
-echo "address=/unifi/172.16.1.2" > $dns_settings
-echo "address=/adguard/172.16.1.3" >> $dns_settings
-echo -e "\n✅ Network settings saved."
+dns_settings="/home/pi/.firewalla/config/dnsmasq_local/unifi"
+sudo touch "$dns_settings"
+sudo chown pi:pi "$dns_settings"
+sudo chmod 644 "$dns_settings"
+echo "address=/unifi/172.16.1.2" > "$dns_settings"
+echo "address=/adguard/172.16.1.3" >> "$dns_settings"
+echo "✅ DNS settings configured"
 
-# Restart DNS service
-sleep 10
-sudo systemctl restart firerouter_dns
-echo -e "\n✅ Network service restarted..."
-
-# Set up auto-start script
-path3=/home/pi/.firewalla/config/post_main.d
-if [ ! -d "$path3" ]; then
-    sudo mkdir $path3
-    sudo chown pi $path3
-    sudo chmod +rw $path3
-fi
-
-cat > $path3/start_unifi_adguard.sh << 'EOL'
+# Set up auto-start configuration
+auto_start="/home/pi/.firewalla/config/post_main.d/start_services.sh"
+sudo mkdir -p "$(dirname "$auto_start")"
+cat > "$auto_start" << 'EOL'
 #!/bin/bash
 sudo systemctl start docker
 sudo systemctl start docker-compose@unifi
@@ -307,17 +183,10 @@ sudo ipset create -! docker_wan_routable_net_set hash:net
 sudo ipset add -! docker_wan_routable_net_set 172.16.1.0/24
 EOL
 
-# Add Gold SE specific networking if needed
-[ -f /etc/update-motd.d/00-header ] && series=$(/etc/update-motd.d/00-header | grep "Welcome to" | sed -e "s|Welcome to ||g" -e "s|FIREWALLA ||g" -e "s|\s[0-9].*$||g") || series=""
-if [[ "$series" == *"gold-se"* ]] && ! grep -q "MASQUERADE" "$path3/start_unifi_adguard.sh"; then
-    echo "Adding Gold SE networking..."
-    echo -e "sudo iptables -t nat -A POSTROUTING -s 172.16.1.0/16 -o eth0 -j MASQUERADE" >> $path3/start_unifi_adguard.sh
-fi
+sudo chmod +x "$auto_start"
+sudo chown pi:pi "$auto_start"
 
-chmod a+x $path3/start_unifi_adguard.sh
-chown pi $path3/start_unifi_adguard.sh
-
-# Final setup and information display
+# Final setup information
 echo -e "\n================================================="
 echo -e "Installation Complete! Important Information:"
 echo -e "================================================="
@@ -326,11 +195,11 @@ echo -e "AdGuard Home Admin Interface: http://172.16.1.3:3000"
 echo -e "\nAdGuard Home Credentials:"
 echo -e "Username: ${ADGUARD_USER}"
 echo -e "Password: ${ADGUARD_PASSWORD}"
-echo -e "\nIMPORTANT: Please save these credentials in a secure location."
+echo -e "\nIMPORTANT: Please save these credentials securely!"
 echo -e "\nNext Steps:"
-echo -e "1. Wait about 2 minutes for all services to fully start"
-echo -e "2. Access AdGuard Home admin interface at http://172.16.1.3:3000"
-echo -e "3. Configure your Firewalla to use 172.16.1.3 as the DNS server"
-echo -e "4. The UniFi Controller will be available at https://172.16.1.2:8443"
-echo -e "\nNote: Browser security warnings are normal for these local addresses"
+echo -e "1. Allow 5 minutes for services to fully initialize"
+echo -e "2. Access the UniFi Controller at https://172.16.1.2:8443"
+echo -e "3. Access AdGuard Home at http://172.16.1.3:3000"
+echo -e "4. Configure Firewalla to use 172.16.1.3 as DNS server"
+echo -e "\nNote: Browser security warnings are normal for local addresses"
 echo -e "================================================="
