@@ -47,25 +47,33 @@ cat > $path2/docker-compose.yaml << EOL
 version: '3'
 services:
   unifi:
-    image: jacobalberty/unifi:latest
+    # Using the official Ubiquiti image from linuxserver.io
+    image: lscr.io/linuxserver/unifi-network-application:latest
     container_name: unifi
     restart: unless-stopped
     environment:
       - TZ=UTC
+      - PUID=1000    # This matches the 'pi' user in Firewalla
+      - PGID=1000    # This matches the 'pi' group in Firewalla
+      - MEM_LIMIT=1024    # Limiting memory usage to 1GB for stability
+      - MEM_STARTUP=1024  # Allocating 1GB for startup
     networks:
       unifi_default:
         ipv4_address: 172.16.1.2
     volumes:
-      - /data/unifi:/unifi
+      - /data/unifi:/config    # Note: Changed from /unifi to /config as per official image specs
     ports:
-      - "3478:3478/udp"
-      - "8080:8080"
-      - "8443:8443"
-      - "8880:8880"
-      - "8843:8843"
-      - "6789:6789"
-      - "10001:10001/udp"
-
+      - "172.16.1.2:3478:3478/udp"  # STUN
+      - "172.16.1.2:8080:8080"      # Device/ Controller Communication
+      - "172.16.1.2:8443:8443"      # Web UI
+      - "172.16.1.2:8880:8880"      # HTTP Portal Redirect
+      - "172.16.1.2:8843:8843"      # HTTPS Portal Redirect
+      - "172.16.1.2:6789:6789"      # Mobile Speed Test
+      - "172.16.1.2:10001:10001/udp" # Discovery
+      - "172.16.1.2:1900:1900/udp"  # L2 Discovery
+      - "172.16.1.2:3478:3478"      # STUN
+      - "172.16.1.2:5514:5514/udp"  # Remote Syslog
+    
   adguardhome:
     container_name: adguardhome
     image: adguard/adguardhome:latest
@@ -78,7 +86,6 @@ services:
     volumes:
       - /data/adguardhome/conf:/opt/adguardhome/conf
       - /data/adguardhome/work:/opt/adguardhome/work
-    # Note: We're binding specifically to the Docker network IP
     ports:
       - "172.16.1.3:53:53/tcp"
       - "172.16.1.3:53:53/udp"
